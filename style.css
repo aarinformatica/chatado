@@ -50,7 +50,7 @@
 .login-card button:hover { background: var(--primary-hover); }
 
 /* === CHAT === */
-#chatScreen { height: 90vh; display: flex; flex-direction: column; background: #f7f9fc; }
+#chatScreen { height: 95vh; display: flex; flex-direction: column; background: #f7f9fc; }
 
 /* Menu hamburguer */
 .menu-hamburger {
