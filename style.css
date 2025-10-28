@@ -50,7 +50,7 @@
 .login-card button:hover { background: var(--primary-hover); }
 
 /* === CHAT === */
-#chatScreen { height: 95vh; display: flex; flex-direction: column; background: #f7f9fc; }
+#chatScreen { height: 100vh; display: flex; flex-direction: column; background: #f7f9fc; }
 
 /* Menu hamburguer */
 .menu-hamburger {
@@ -370,4 +370,82 @@
 
 .close-participants-btn:hover {
   background: var(--primary-hover);
+}
+/* ===== ESTILO DAS MENSAGENS ===== */
+.message {
+  max-width: 70%;
+  padding: 10px 14px;
+  border-radius: 15px;
+  margin: 8px 0;
+  word-wrap: break-word;
+  position: relative;
+  display: inline-block;
+  animation: fadeIn 0.3s ease;
+}
+
+/* Suas mensagens (lado direito) */
+.message.own {
+  background: linear-gradient(135deg, #4b6cb7, #182848);
+  color: #fff;
+  align-self: flex-end;
+  border-top-right-radius: 2px;
+}
+
+/* Mensagens recebidas (lado esquerdo) */
+.message.other {
+  background: #f1f1f1;
+  color: #333;
+  align-self: flex-start;
+  border-top-left-radius: 2px;
+}
+
+/* Leve variação de cor para mensagens de áudio */
+.message audio {
+  width: 100%;
+  margin-top: 5px;
+  border-radius: 8px;
+  background: transparent;
+}
+
+/* Player de áudio dentro do balão */
+.message.own audio {
+  background: rgba(255, 255, 255, 0.15);
+  filter: invert(1);
+  border-radius: 8px;
+}
+
+.message.other audio {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* ===== MOBILE ===== */
+@media (max-width: 600px) {
+  .message {
+    max-width: 90%;
+    padding: 8px 12px;
+  }
+
+  .message audio {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  /* Player totalmente dentro do balão no mobile */
+  .message.own audio,
+  .message.other audio {
+    display: block;
+    margin-top: 5px;
+  }
+}
+
+/* ===== ANIMAÇÃO ===== */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
