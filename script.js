@@ -1,7 +1,7 @@
-// script.js - Chat completo com Ably, WebRTC, envio de arquivos e criação de grupos
+// script.js - Chat completo com Ably, WebRTC, envio de arquivos, criação de grupos e mensagens de voz
 // Mantive a estrutura do seu código original, finalizei partes faltantes,
-// e adicionei tratamento robusto para getUserMedia / WebRTC.
-// Inclui: botão "Ver participantes" ao lado do grupo + modal com add/remove membros
+// adicionei tratamento robusto para getUserMedia / WebRTC e gravação de áudio.
+
 document.addEventListener('DOMContentLoaded', function () {
 
   // ----------------- Config / Variáveis globais -----------------
@@ -44,6 +44,12 @@ document.addEventListener('DOMContentLoaded', function () {
   var attachFileBtn = document.getElementById('attachFileBtn');
   var fileInput = document.getElementById('fileInput');
 
+  // Voice recording controls
+  var micBtn = null;
+  var mediaRecorder = null;
+  var recordedChunks = [];
+  var isRecording = false;
+
   // ensure attachFileBtn and fileInput exist
   if (!attachFileBtn && inputArea) {
     attachFileBtn = document.createElement('button');
@@ -60,6 +66,26 @@ document.addEventListener('DOMContentLoaded', function () {
     document.body.appendChild(fileInput);
   }
 
+  // Create microphone button (always visible next to send)
+  if (inputArea && !document.getElementById('micBtn')) {
+    micBtn = document.createElement('button');
+    micBtn.id = 'micBtn';
+    micBtn.title = 'Gravar mensagem de voz';
+    micBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
+    micBtn.style.marginRight = '8px';
+    micBtn.style.border = 'none';
+    micBtn.style.background = 'transparent';
+    micBtn.style.cursor = 'pointer';
+    micBtn.style.fontSize = '18px';
+    micBtn.style.display = 'inline-flex';
+    micBtn.style.alignItems = 'center';
+    micBtn.style.justifyContent = 'center';
+    // insert before sendMessageBtn
+    if (sendMessageBtn) inputArea.insertBefore(micBtn, sendMessageBtn);
+  } else {
+    micBtn = document.getElementById('micBtn');
+  }
+
   // close-chat button
   var closeChatBtn = document.createElement('button');
   closeChatBtn.className = 'close-chat-btn';
@@ -68,7 +94,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var chatHeader = document.querySelector('.chat-header');
   if (chatHeader) chatHeader.appendChild(closeChatBtn);
 
-  // Create group button
+  // Create group button (for creating groups)
   var createGroupBtn = document.createElement('button');
   createGroupBtn.id = 'createGroupBtn';
   createGroupBtn.style.margin = '8px';
@@ -84,11 +110,11 @@ document.addEventListener('DOMContentLoaded', function () {
     if (contactsHeader && contactsHeader.parentNode) contactsHeader.parentNode.insertBefore(createGroupBtn, contactsHeader.nextSibling);
   } catch (e) { /* ignore */ }
 
-  // Group creation modal (already in your original structure)
-  var groupModal = document.createElement('div');
-  groupModal.className = 'video-modal';
-  groupModal.style.display = 'none';
-  groupModal.innerHTML = '<div class="video-container" style="background:#111;padding:18px;border-radius:12px;text-align:left;max-width:480px;width:90%;">' +
+  // Group creation modal (rename to avoid collision with members modal)
+  var groupCreateModal = document.createElement('div');
+  groupCreateModal.className = 'video-modal';
+  groupCreateModal.style.display = 'none';
+  groupCreateModal.innerHTML = '<div class="video-container" style="background:#111;padding:18px;border-radius:12px;text-align:left;max-width:480px;width:90%;">' +
     '<h3 style="color:#fff;margin-bottom:8px;">Criar grupo</h3>' +
     '<label style="color:#fff;display:block;margin-bottom:6px;">Nome do grupo</label>' +
     '<input id="groupNameInput" placeholder="Ex: Amigos" style="width:100%;padding:8px;border-radius:6px;border:none;margin-bottom:10px;">' +
@@ -98,11 +124,11 @@ document.addEventListener('DOMContentLoaded', function () {
     '<button id="cancelCreateGroup" style="padding:8px 12px;border-radius:6px;border:none;cursor:pointer;background:#e74c3c;color:#fff;">Cancelar</button>' +
     '<button id="confirmCreateGroup" style="padding:8px 12px;border-radius:6px;border:none;cursor:pointer;background:#00b894;color:#fff;">Criar</button>' +
     '</div></div>';
-  document.body.appendChild(groupModal);
-  var groupNameInput = groupModal.querySelector('#groupNameInput');
-  var groupContactsList = groupModal.querySelector('#groupContactsList');
-  var cancelCreateGroup = groupModal.querySelector('#cancelCreateGroup');
-  var confirmCreateGroup = groupModal.querySelector('#confirmCreateGroup');
+  document.body.appendChild(groupCreateModal);
+  var groupNameInput = groupCreateModal.querySelector('#groupNameInput');
+  var groupContactsList = groupCreateModal.querySelector('#groupContactsList');
+  var cancelCreateGroup = groupCreateModal.querySelector('#cancelCreateGroup');
+  var confirmCreateGroup = groupCreateModal.querySelector('#confirmCreateGroup');
 
   // Incoming-call modal
   var callModal = document.createElement('div');
@@ -138,30 +164,52 @@ document.addEventListener('DOMContentLoaded', function () {
   var muteAudioBtn = videoModal.querySelector('#muteAudioBtn');
   var muteVideoBtn = videoModal.querySelector('#muteVideoBtn');
 
-  // ----------------- PARTICIPANTS MODAL (Ver Participantes) -----------------
-  var participantsModal = document.createElement('div');
-  participantsModal.className = 'video-modal';
-  participantsModal.style.display = 'none';
-  participantsModal.innerHTML = '<div class="video-container" style="background:#fff;padding:18px;border-radius:12px;text-align:left;max-width:420px;width:90%;">' +
-    '<h3 id="participantsModalTitle" style="color:#4b6cb7;margin-bottom:8px;"></h3>' +
-    '<ul id="participantsList" style="list-style:none;padding:0;margin:0;max-height:220px;overflow:auto;"></ul>' +
-    '<div style="display:flex;gap:8px;margin-top:12px;">' +
-      '<input id="addParticipantInput" placeholder="Adicionar participante (nome)" style="flex:1;padding:8px;border-radius:6px;border:1px solid #ddd;">' +
-      '<button id="addParticipantBtn" style="padding:8px 12px;border-radius:6px;border:none;background:#00b894;color:#fff;cursor:pointer;">Adicionar</button>' +
-    '</div>' +
-    '<div style="display:flex;justify-content:flex-end;margin-top:12px;">' +
-    '<button id="closeParticipantsModal" style="padding:8px 12px;border-radius:6px;border:none;background:#e74c3c;color:#fff;cursor:pointer;">Fechar</button>' +
-    '</div></div>';
-  document.body.appendChild(participantsModal);
-  var participantsModalTitle = participantsModal.querySelector('#participantsModalTitle');
-  var participantsList = participantsModal.querySelector('#participantsList');
-  var addParticipantInput = participantsModal.querySelector('#addParticipantInput');
-  var addParticipantBtn = participantsModal.querySelector('#addParticipantBtn');
-  var closeParticipantsModal = participantsModal.querySelector('#closeParticipantsModal');
+  // ----------------- Modal de participantes de grupo -----------------
+  var groupMembersModal = document.createElement('div');
+  groupMembersModal.id = 'groupMembersModal';
+  groupMembersModal.className = 'video-modal';
+  groupMembersModal.style.display = 'none';
+  groupMembersModal.innerHTML = `
+    <div class="video-container" style="background:#fff;padding:16px;border-radius:12px;max-width:360px;width:90%;text-align:left;">
+      <h3 id="groupMembersTitle" style="color:#4b6cb7;margin-bottom:8px;"></h3>
+      <ul id="groupMembersList" style="list-style:none;padding:0;margin:0 0 12px 0;max-height:260px;overflow:auto;"></ul>
+      <div style="text-align:right;">
+        <button id="closeGroupMembersModal" style="background:#4b6cb7;color:#fff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer;">Fechar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(groupMembersModal);
+  var groupMembersTitle = groupMembersModal.querySelector('#groupMembersTitle');
+  var groupMembersList = groupMembersModal.querySelector('#groupMembersList');
+  var closeGroupMembersModal = groupMembersModal.querySelector('#closeGroupMembersModal');
 
-  closeParticipantsModal.addEventListener('click', function () {
-    participantsModal.style.display = 'none';
+  closeGroupMembersModal && closeGroupMembersModal.addEventListener('click', function () {
+    groupMembersModal.style.display = 'none';
   });
+
+  function openGroupMembersModal(groupId) {
+    var g = groups[groupId];
+    var name = (g && g.name) ? g.name : groupId;
+    var members = (g && g.members) ? g.members : [];
+    groupMembersTitle.textContent = 'Participantes - ' + name;
+    groupMembersList.innerHTML = '';
+    if (!members || members.length === 0) {
+      var li = document.createElement('li');
+      li.textContent = 'Nenhum participante.';
+      li.style.color = '#666';
+      li.style.padding = '6px 0';
+      groupMembersList.appendChild(li);
+    } else {
+      members.forEach(function (m) {
+        var li = document.createElement('li');
+        li.style.padding = '6px 0';
+        li.style.borderBottom = '1px solid #eee';
+        li.textContent = '👤 ' + m;
+        groupMembersList.appendChild(li);
+      });
+    }
+    groupMembersModal.style.display = 'flex';
+  }
 
   // ----------------- Utilitários -----------------
   function escapeHtml(s) {
@@ -191,7 +239,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }, 1200);
   }
 
-  // ----------------- Contatos e Grupos -----------------
+  // ----------------- Contatos e Grupos (render com botão ver participantes) -----------------
   function renderContacts() {
     if (!contactsUl) return;
     contactsUl.innerHTML = '';
@@ -206,6 +254,7 @@ document.addEventListener('DOMContentLoaded', function () {
       li.style.display = 'flex';
       li.style.alignItems = 'center';
       li.style.justifyContent = 'space-between';
+      li.style.padding = '8px';
 
       var leftWrap = document.createElement('div');
       leftWrap.style.display = 'flex';
@@ -222,31 +271,34 @@ document.addEventListener('DOMContentLoaded', function () {
       leftWrap.appendChild(nameSpan);
       li.appendChild(leftWrap);
 
-      // View participants btn (small icon)
-      var viewBtn = document.createElement('button');
-      viewBtn.className = 'view-members-btn';
-      viewBtn.title = 'Ver participantes';
-      viewBtn.innerHTML = '<i class="fa-solid fa-user-group"></i>';
-      viewBtn.style.background = 'transparent';
-      viewBtn.style.border = 'none';
-      viewBtn.style.cursor = 'pointer';
-      viewBtn.style.fontSize = '18px';
-      viewBtn.style.marginLeft = '8px';
-      viewBtn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        // open participants modal with group data
-        participantsModalTitle.textContent = 'Participantes - ' + g.name;
-        refreshParticipantsList(g);
-        participantsModal.style.display = 'flex';
-      });
-      li.appendChild(viewBtn);
+      // Right side: badge + view members
+      var rightWrap = document.createElement('div');
+      rightWrap.style.display = 'flex';
+      rightWrap.style.alignItems = 'center';
+      rightWrap.style.gap = '8px';
 
       var count = unreadCounts[gid] || 0;
       var badge = document.createElement('span');
       badge.className = 'unread-badge';
       badge.textContent = count;
       badge.style.display = count > 0 ? 'flex' : 'none';
-      li.appendChild(badge);
+      rightWrap.appendChild(badge);
+
+      // View members button
+      var viewMembersBtn = document.createElement('button');
+      viewMembersBtn.className = 'call-btn';
+      viewMembersBtn.title = 'Ver participantes';
+      viewMembersBtn.innerHTML = '<i class="fa-solid fa-user-group"></i>';
+      viewMembersBtn.style.background = 'none';
+      viewMembersBtn.style.border = 'none';
+      viewMembersBtn.style.cursor = 'pointer';
+      viewMembersBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        openGroupMembersModal(gid);
+      });
+      rightWrap.appendChild(viewMembersBtn);
+
+      li.appendChild(rightWrap);
 
       li.addEventListener('click', function () {
         openChat(gid, true);
@@ -266,6 +318,10 @@ document.addEventListener('DOMContentLoaded', function () {
       li.dataset.user = user;
       li.className = 'contact-item';
       li.style.position = 'relative';
+      li.style.display = 'flex';
+      li.style.alignItems = 'center';
+      li.style.justifyContent = 'space-between';
+      li.style.padding = '8px';
 
       var leftWrap = document.createElement('div');
       leftWrap.style.display = 'flex';
@@ -281,6 +337,12 @@ document.addEventListener('DOMContentLoaded', function () {
       leftWrap.appendChild(nameSpan);
       li.appendChild(leftWrap);
 
+      // Right side: call button + badge
+      var rightWrap = document.createElement('div');
+      rightWrap.style.display = 'flex';
+      rightWrap.style.alignItems = 'center';
+      rightWrap.style.gap = '8px';
+
       // call button (video icon)
       var callBtn = document.createElement('button');
       callBtn.className = 'call-btn';
@@ -290,15 +352,16 @@ document.addEventListener('DOMContentLoaded', function () {
         e.stopPropagation();
         startVideoCall(user);
       });
-      li.appendChild(callBtn);
+      rightWrap.appendChild(callBtn);
 
-      // badge
       var count = unreadCounts[user] || 0;
       var badge = document.createElement('span');
       badge.className = 'unread-badge';
       badge.textContent = count;
       badge.style.display = count > 0 ? 'flex' : 'none';
-      li.appendChild(badge);
+      rightWrap.appendChild(badge);
+
+      li.appendChild(rightWrap);
 
       li.addEventListener('click', function () {
         openChat(user, false);
@@ -310,101 +373,6 @@ document.addEventListener('DOMContentLoaded', function () {
       contactsUl.appendChild(li);
     });
   }
-
-  // ----------------- Participants modal helpers -----------------
-  function refreshParticipantsList(groupObj) {
-    participantsList.innerHTML = '';
-    var members = groupObj && groupObj.members ? groupObj.members.slice() : [];
-    if (members.length === 0) {
-      var li = document.createElement('li');
-      li.textContent = 'Nenhum participante';
-      li.style.color = '#666';
-      li.style.padding = '6px 0';
-      participantsList.appendChild(li);
-    } else {
-      members.forEach(function (m) {
-        var li = document.createElement('li');
-        li.style.display = 'flex';
-        li.style.justifyContent = 'space-between';
-        li.style.alignItems = 'center';
-        li.style.padding = '6px 0';
-        li.style.borderBottom = '1px solid #eee';
-        var span = document.createElement('span');
-        span.textContent = m;
-        li.appendChild(span);
-
-        var btnWrap = document.createElement('div');
-
-        // Remove button (don't allow removing yourself via UI; but allow if you want to implement)
-        if (m !== username) {
-          var removeBtn = document.createElement('button');
-          removeBtn.textContent = 'Remover';
-          removeBtn.style.background = '#e74c3c';
-          removeBtn.style.color = '#fff';
-          removeBtn.style.border = 'none';
-          removeBtn.style.padding = '6px 8px';
-          removeBtn.style.borderRadius = '6px';
-          removeBtn.style.cursor = 'pointer';
-          removeBtn.addEventListener('click', function () {
-            // remove member from groupObj
-            var idx = groupObj.members.indexOf(m);
-            if (idx !== -1) {
-              groupObj.members.splice(idx, 1);
-              // publish group-updated
-              publishGroupUpdated(groupObj);
-              // update UI
-              refreshParticipantsList(groupObj);
-              renderContacts();
-            }
-          });
-          btnWrap.appendChild(removeBtn);
-        } else {
-          var youBadge = document.createElement('span');
-          youBadge.textContent = 'Você';
-          youBadge.style.color = '#4b6cb7';
-          youBadge.style.marginLeft = '8px';
-          btnWrap.appendChild(youBadge);
-        }
-
-        li.appendChild(btnWrap);
-        participantsList.appendChild(li);
-      });
-    }
-    // prepare add input
-    addParticipantInput.value = '';
-    // attach add handler (re-bind safe)
-  }
-
-  addParticipantBtn.addEventListener('click', function () {
-    var name = (addParticipantInput.value || '').trim();
-    if (!name) { alert('Digite o nome do participante a adicionar'); return; }
-    // check current group shown in modal (by title)
-    var title = participantsModalTitle.textContent || '';
-    // title is "Participantes - <groupName>", find group by name
-    var match = title.replace(/^Participantes\s*-\s*/, '').trim();
-    var found = null;
-    Object.keys(groups).forEach(function (gid) {
-      if (groups[gid].name === match) found = groups[gid];
-    });
-    if (!found) { alert('Grupo não encontrado'); return; }
-    if (!found.members) found.members = [];
-    if (found.members.indexOf(name) !== -1) { alert('Usuário já é membro'); return; }
-    found.members.push(name);
-    // publish group-updated
-    publishGroupUpdated(found);
-    refreshParticipantsList(found);
-    renderContacts();
-  });
-
-  function publishGroupUpdated(groupObj) {
-    try {
-      var ch = ably ? ably.channels.get('groups') : null;
-      if (ch) ch.publish('group-updated', groupObj);
-    } catch (e) { /* ignore */ }
-  }
-
-  // Listen for group-updated incoming
-  // will be registered inside initAbly() where ably exists
 
   // ----------------- Chat UI -----------------
   function openChat(id, isGroup) {
@@ -420,22 +388,27 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var history = chatHistory[id] || [];
     history.forEach(function (m) {
-      addMessageToDom(m.sender, m.text || ('Arquivo: ' + (m.name || '')), m.time, false, m.file);
+      addMessageToDom(m.sender, m.text || ('Arquivo: ' + (m.name || '')), m.time, false, m.file, m.type, m.duration);
     });
 
     // ensure channel subscription for this chat/group
     setupPrivateChannel(id);
   }
 
-  function addMessageToDom(sender, text, time, highlight, fileData) {
+  function addMessageToDom(sender, text, time, highlight, fileData, type, duration) {
     if (!messagesDiv) return;
     var div = document.createElement('div');
     div.className = 'message ' + (sender === username ? 'own' : 'other');
-    var inner = '<strong>' + escapeHtml(sender) + ':</strong> ' + escapeHtml(text || '');
-    if (fileData) {
+    var inner = '<strong>' + escapeHtml(sender) + ':</strong> ' + (text ? escapeHtml(text) : '');
+    if (type === 'audio' && fileData && fileData.startsWith('data:audio')) {
+      inner += '<br><div style="margin-top:6px;"><audio controls src="' + fileData + '"></audio>';
+      if (duration) inner += '<div class="time" style="font-size:11px;color:#555;margin-top:6px;">' + escapeHtml(duration) + '</div>';
+      inner += '</div>';
+    } else if (fileData) {
       if (fileData.startsWith('data:image')) inner += '<br><img src="' + fileData + '" style="max-width:200px;border-radius:12px;margin-top:6px;">';
       else inner += '<br><a href="' + fileData + '" download target="_blank">' + escapeHtml(text || 'Arquivo') + '</a>';
     }
+
     div.innerHTML = inner;
     var timeDiv = document.createElement('div');
     timeDiv.className = 'time';
@@ -570,19 +543,6 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     } catch (e) { /* ignore */ }
 
-    // listen for group-updated events (add/remove members)
-    try {
-      groupsChannel.subscribe('group-updated', function (msg) {
-        var g = msg.data || {};
-        if (!g.id) return;
-        // update local groups state (replace)
-        groups[g.id] = g;
-        chatHistory[g.id] = chatHistory[g.id] || [];
-        ensurePrivateChannelWithUser('group:' + g.id);
-        renderContacts();
-      });
-    } catch (e) { /* ignore */ }
-
     // request groups list (naive peer-to-peer approach)
     try { groupsChannel.publish('query-groups', { who: username }); } catch (e) { }
 
@@ -639,6 +599,7 @@ document.addEventListener('DOMContentLoaded', function () {
       try { ch.subscribe('message', function (msg) { handleIncomingMessage(msg.data, channelName); }); } catch (e) { }
       try { ch.subscribe('typing', function (msg) { handleIncomingTyping(msg.data, channelName); }); } catch (e) { }
       try { ch.subscribe('call', function (msg) { handleCallSignal(msg.data, ch); }); } catch (e) { }
+      try { ch.subscribe('audio', function (msg) { /* in case separate audio events used in future */ }); } catch (e) { }
       try { ch.presence.enter({ username: username }); } catch (e) { /* ignore */ }
     }
     return privateChannels[channelName];
@@ -651,11 +612,14 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!chatHistory[chatKey]) chatHistory[chatKey] = [];
     if (data.id && seenMessageIds.has(data.id)) return;
     if (data.id) seenMessageIds.add(data.id);
-    chatHistory[chatKey].push({ id: data.id, sender: data.username, text: data.text, file: data.file, name: data.name, time: data.time });
+
+    // Normalize message object stored in history: include type and possible file/audio
+    var msgObj = { id: data.id, sender: data.username, text: data.text, file: data.file, name: data.name, time: data.time, type: data.type, duration: data.duration };
+    chatHistory[chatKey].push(msgObj);
     if (chatHistory[chatKey].length > 200) chatHistory[chatKey].shift();
 
     if (currentChatUser === chatKey) {
-      addMessageToDom(data.username, data.text || ('Arquivo: ' + (data.name || '')), data.time, true, data.file);
+      addMessageToDom(data.username, data.text || ('Arquivo: ' + (data.name || '')), data.time, true, data.file, data.type, data.duration);
     } else {
       unreadCounts[chatKey] = (unreadCounts[chatKey] || 0) + 1;
       renderContacts();
@@ -708,11 +672,11 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     }
     groupNameInput.value = '';
-    groupModal.style.display = 'flex';
+    groupCreateModal.style.display = 'flex';
   });
 
   cancelCreateGroup && cancelCreateGroup.addEventListener('click', function () {
-    groupModal.style.display = 'none';
+    groupCreateModal.style.display = 'none';
   });
 
   confirmCreateGroup && confirmCreateGroup.addEventListener('click', function () {
@@ -733,7 +697,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     ensurePrivateChannelWithUser('group:' + id);
     renderContacts();
-    groupModal.style.display = 'none';
+    groupCreateModal.style.display = 'none';
     openChat(id, true);
   });
 
@@ -938,6 +902,109 @@ document.addEventListener('DOMContentLoaded', function () {
       tracks.forEach(function (t) { t.enabled = newState; });
       muteVideoBtn.textContent = newState ? 'Vídeo Off' : 'Vídeo On';
       if (newState) muteVideoBtn.classList.add('active'); else muteVideoBtn.classList.remove('active');
+    });
+  }
+
+  // ----------------- Voice recording (MediaRecorder) -----------------
+  async function startRecording() {
+    if (isRecording) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('Seu navegador não suporta gravação de áudio.');
+      return;
+    }
+    try {
+      var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // create MediaRecorder
+      mediaRecorder = new MediaRecorder(stream);
+      recordedChunks = [];
+      mediaRecorder.ondataavailable = function (evt) {
+        if (evt.data && evt.data.size > 0) recordedChunks.push(evt.data);
+      };
+      mediaRecorder.onstop = function () {
+        // stop tracks
+        try { stream.getTracks().forEach(t => t.stop()); } catch (e) { }
+        // create blob
+        var blob = new Blob(recordedChunks, { type: 'audio/ogg; codecs=opus' });
+        // get duration using audio element
+        var audioURL = URL.createObjectURL(blob);
+        var tempAudio = new Audio();
+        tempAudio.src = audioURL;
+        tempAudio.addEventListener('loadedmetadata', function () {
+          var dur = Math.round(tempAudio.duration);
+          var mm = Math.floor(dur / 60);
+          var ss = dur % 60;
+          var durationText = (mm < 10 ? '0' + mm : mm) + ':' + (ss < 10 ? '0' + ss : ss);
+
+          // convert to data URL and send
+          var reader = new FileReader();
+          reader.onloadend = function () {
+            var base64data = reader.result; // data:audio/ogg;base64,...
+            // store in chat history
+            var time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            var id = genMessageId();
+            chatHistory[currentChatUser] = chatHistory[currentChatUser] || [];
+            chatHistory[currentChatUser].push({ id: id, sender: username, text: 'Mensagem de voz', file: base64data, type: 'audio', time: time, duration: durationText });
+            if (chatHistory[currentChatUser].length > 200) chatHistory[currentChatUser].shift();
+            addMessageToDom(username, 'Mensagem de voz', time, false, base64data, 'audio', durationText);
+            seenMessageIds.add(id);
+
+            // publish via Ably
+            try {
+              if (currentChatIsGroup) {
+                var ch = ensurePrivateChannelWithUser('group:' + currentChatUser);
+                if (ch) ch.publish('message', { id: id, username: username, text: 'Mensagem de voz', file: base64data, type: 'audio', time: time, duration: durationText, groupId: currentChatUser });
+              } else {
+                var ch = ensurePrivateChannelWithUser(currentChatUser);
+                if (ch) ch.publish('message', { id: id, username: username, text: 'Mensagem de voz', file: base64data, type: 'audio', time: time, duration: durationText });
+              }
+            } catch (e) { console.warn('publish audio failed', e); }
+
+          };
+          reader.readAsDataURL(blob);
+          URL.revokeObjectURL(audioURL);
+        });
+      };
+
+      mediaRecorder.start();
+      isRecording = true;
+      // visual cue: slight color change
+      if (micBtn) micBtn.style.background = 'rgba(75,108,183,0.12)'; // light tint
+      if (micBtn) micBtn.style.color = '#2c3e81';
+      // optional small label "Gravando..." next to mic
+      if (messageInput) {
+        micBtn.dataset.prevTitle = micBtn.title;
+        micBtn.title = 'Gravando... Clique para parar';
+      }
+    } catch (err) {
+      console.error('Erro ao acessar microfone para gravação:', err);
+      alert('Não foi possível acessar o microfone. Verifique as permissões do navegador.');
+      isRecording = false;
+      if (micBtn) micBtn.style.background = 'transparent';
+      if (micBtn) micBtn.title = 'Gravar mensagem de voz';
+    }
+  }
+
+  function stopRecording() {
+    if (!isRecording || !mediaRecorder) return;
+    try {
+      mediaRecorder.stop();
+    } catch (e) { console.warn(e); }
+    isRecording = false;
+    if (micBtn) micBtn.style.background = 'transparent';
+    if (micBtn) micBtn.title = micBtn.dataset.prevTitle || 'Gravar mensagem de voz';
+    mediaRecorder = null;
+  }
+
+  // mic button actions: toggle start/stop on click
+  if (micBtn) {
+    micBtn.addEventListener('click', function () {
+      // require an opened chat to send voice
+      if (!currentChatUser) {
+        alert('Abra um chat antes de gravar uma mensagem de voz.');
+        return;
+      }
+      if (!isRecording) startRecording();
+      else stopRecording();
     });
   }
 
